@@ -1,0 +1,28 @@
+# Node & Build artifacts
+node_modules/
+dist/
+build/
+.cache/
+
+# Environment files
+.env
+.env.local
+
+# Temp downloads
+*temp*
+*.mp4
+*.mp3
+*.webm
+*.m4a
+*.part
+*.ytdl
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS & Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

@@ -21,7 +21,7 @@ export async function analyzeHandler(req: Request, res: Response): Promise<void>
     if (!parsed.success) {
       res.status(400).json({
         success: false,
-        error: parsed.error.errors[0]?.message || 'Invalid request body'
+        error: parsed.error.issues[0]?.message || 'Invalid request body'
       });
       return;
     }
@@ -47,7 +47,7 @@ export async function downloadHandler(req: Request, res: Response): Promise<void
     if (!parsed.success) {
       res.status(400).json({
         success: false,
-        error: parsed.error.errors[0]?.message || 'Invalid request parameters'
+        error: parsed.error.issues[0]?.message || 'Invalid request parameters'
       });
       return;
     }
@@ -87,18 +87,35 @@ export async function jobStatusHandler(req: Request, res: Response): Promise<voi
     return;
   }
 
+  if (job.status === 'ready') {
+    try {
+      const stats = job.filePath ? fs.statSync(job.filePath) : null;
+      if (!stats?.isFile() || stats.size <= 0) {
+        jobManager.updateJob(id, { status: 'error', message: 'The completed download file is missing or empty. Please start the download again.' });
+      }
+    } catch {
+      jobManager.updateJob(id, { status: 'error', message: 'The completed download file is no longer available. Please start the download again.' });
+    }
+  }
+
+  const currentJob = jobManager.getJob(id);
+  if (!currentJob) {
+    res.status(404).json({ success: false, error: 'Job not found or has expired. Please try again.' });
+    return;
+  }
+
   res.status(200).json({
     success: true,
     job: {
-      id: job.id,
-      status: job.status,
-      progress: job.progress,
-      message: job.message,
-      fileSize: job.fileSize,
-      safeFilename: job.safeFilename,
-      targetExt: job.targetExt,
-      createdAt: job.createdAt,
-      expiresAt: job.expiresAt
+      id: currentJob.id,
+      status: currentJob.status,
+      progress: currentJob.progress,
+      message: currentJob.message,
+      fileSize: currentJob.fileSize,
+      safeFilename: currentJob.safeFilename,
+      targetExt: currentJob.targetExt,
+      createdAt: currentJob.createdAt,
+      expiresAt: currentJob.expiresAt
     }
   });
 }
@@ -119,11 +136,19 @@ export async function streamFileHandler(req: Request, res: Response): Promise<vo
     return;
   }
 
-  if (!fs.existsSync(job.filePath)) {
+  let fileStats: fs.Stats;
+  try {
+    fileStats = fs.statSync(job.filePath);
+  } catch {
     res.status(404).json({
       success: false,
       error: 'File no longer exists on server.'
     });
+    return;
+  }
+  if (!fileStats.isFile() || fileStats.size <= 0) {
+    jobManager.updateJob(id, { status: 'error', message: 'The completed download file is missing or empty. Please start the download again.' });
+    res.status(404).json({ success: false, error: 'The completed download file is missing or empty. Please start again.' });
     return;
   }
 
@@ -131,25 +156,33 @@ export async function streamFileHandler(req: Request, res: Response): Promise<vo
 
   res.setHeader('Content-Type', job.mimeType || 'application/octet-stream');
   res.setHeader('Content-Disposition', `attachment; filename="${job.safeFilename}"; filename*=UTF-8''${filename}`);
-  if (job.fileSize) {
-    res.setHeader('Content-Length', job.fileSize.toString());
-  }
+  res.setHeader('Content-Length', fileStats.size.toString());
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
 
+  (job as typeof job & { streaming?: number }).streaming = ((job as typeof job & { streaming?: number }).streaming || 0) + 1;
   const readStream = fs.createReadStream(job.filePath);
   readStream.pipe(res);
 
+  const finishStream = () => {
+    const streamJob = job as typeof job & { streaming?: number };
+    streamJob.streaming = Math.max(0, (streamJob.streaming || 1) - 1);
+  };
+  readStream.on('close', finishStream);
+
   readStream.on('error', (err) => {
-    console.error('File stream error:', err);
+    console.error('File stream error:', (err as NodeJS.ErrnoException).code || 'unknown filesystem error');
     if (!res.headersSent) {
-      res.status(500).send('Error streaming file');
+      res.status(500).json({ success: false, error: 'The download file could not be streamed. Please retry the download.' });
+    } else {
+      res.destroy(err);
     }
   });
 
   res.on('finish', () => {
     // Schedule cleanup of downloaded file after 3 minutes so user can re-click if download was interrupted
-    setTimeout(() => {
+    const cleanupTimer = setTimeout(() => {
       jobManager.removeJob(job.id);
     }, 3 * 60 * 1000);
+    cleanupTimer.unref();
   });
 }

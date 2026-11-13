@@ -22,7 +22,9 @@ FROM python:3.11-alpine
 RUN apk add --no-cache nodejs npm ffmpeg curl ca-certificates bash
 
 # Install yt-dlp via pip
-RUN pip install --no-cache-dir yt-dlp
+# Pin to the version observed in the current production health response so
+# Docker rebuilds use a predictable extractor release.
+RUN pip install --no-cache-dir yt-dlp==2026.10.26
 
 WORKDIR /app
 
@@ -49,6 +51,6 @@ ENV PORT=5000 \
 EXPOSE 5000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD curl -f http://localhost:5000/api/health || exit 1
+  CMD-SHELL curl -f "http://localhost:${PORT:-5000}/api/health" || exit 1
 
 CMD ["node", "backend/dist/server.js"]

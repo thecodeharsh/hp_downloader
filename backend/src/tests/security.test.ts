@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { validateMediaUrl } from '../utils/ssrf.js';
-import { sanitizeFilename, formatBytes, formatDuration } from '../utils/sanitize.js';
+import { sanitizeFilename, formatBytes, formatDuration, mapExtractionError } from '../utils/sanitize.js';
 
 test('SSRF Protection - Blocks loopback, private IPs, and AWS metadata', async () => {
   const dangerousUrls = [
@@ -53,4 +53,10 @@ test('Formatting Helpers - Bytes and Duration', () => {
   assert.equal(formatBytes(15 * 1024 * 1024), '15.0 MB');
   assert.equal(formatDuration(65), '1:05');
   assert.equal(formatDuration(3665), '1:01:05');
+});
+
+test('Extraction errors explain YouTube hosted anti-bot blocks without claiming they are fixed', () => {
+  const result = mapExtractionError("ERROR: [youtube] Sign in to confirm you're not a bot.");
+  assert.equal(result.status, 503);
+  assert.match(result.message, /temporarily blocking requests from this server/i);
 });

@@ -48,6 +48,10 @@ class JobManager {
     title: string;
     safeFilename: string;
   }): DownloadJob {
+    const activeCount = [...this.jobs.values()].filter(job => ['pending', 'downloading', 'processing'].includes(job.status)).length;
+    if (activeCount >= config.maxConcurrentDownloads) {
+      throw Object.assign(new Error('The download service is busy. Please try again shortly.'), { status: 429 });
+    }
     const id = uuidv4();
     const now = Date.now();
     const expiresAt = now + config.jobTtlMinutes * 60 * 1000;
@@ -71,7 +75,17 @@ class JobManager {
   }
 
   public getJob(id: string): DownloadJob | undefined {
-    return this.jobs.get(id);
+    const job = this.jobs.get(id);
+    if (
+      job &&
+      Date.now() > job.expiresAt &&
+      !['pending', 'downloading', 'processing'].includes(job.status) &&
+      !(job as DownloadJob & { streaming?: number }).streaming
+    ) {
+      this.removeJob(id);
+      return undefined;
+    }
+    return job;
   }
 
   public updateJob(id: string, updates: Partial<DownloadJob>): DownloadJob | undefined {
@@ -85,6 +99,7 @@ class JobManager {
 
   public removeJob(id: string) {
     const job = this.jobs.get(id);
+    if (job && (job as DownloadJob & { streaming?: number }).streaming) return;
     if (job?.filePath && fs.existsSync(job.filePath)) {
       try {
         fs.unlinkSync(job.filePath);
@@ -109,6 +124,7 @@ class JobManager {
     const now = Date.now();
     for (const [id, job] of this.jobs.entries()) {
       if (now > job.expiresAt) {
+        if (['pending', 'downloading', 'processing'].includes(job.status)) continue;
         this.removeJob(id);
       }
     }
@@ -117,7 +133,11 @@ class JobManager {
     try {
       if (fs.existsSync(config.tempDir)) {
         const files = fs.readdirSync(config.tempDir);
+        const activeJobIds = [...this.jobs.values()]
+          .filter(job => ['pending', 'downloading', 'processing'].includes(job.status))
+          .map(job => job.id);
         for (const file of files) {
+          if (activeJobIds.some(id => file.startsWith(`${id}.`))) continue;
           const filePath = path.join(config.tempDir, file);
           const stats = fs.statSync(filePath);
           const ageMinutes = (now - stats.mtimeMs) / (1000 * 60);

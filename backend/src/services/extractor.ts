@@ -38,6 +38,8 @@ export interface MediaMetadata {
   formats: MediaFormatOption[];
 }
 
+let activeAnalysisCount = 0;
+
 /**
  * Extracts and deduplicates clean format options from raw yt-dlp dump-json.
  */
@@ -175,6 +177,13 @@ export async function analyzeMedia(rawUrl: string): Promise<MediaMetadata> {
   if (!validation.valid || !validation.normalizedUrl) {
     throw { status: 400, message: validation.reason || 'Invalid media URL' };
   }
+  if (validation.platform === 'generic') {
+    throw { status: 400, message: 'This site is not supported. Please use a YouTube, Instagram, or Facebook link.' };
+  }
+  if (activeAnalysisCount >= config.maxConcurrentDownloads) {
+    throw { status: 429, message: 'The media service is busy. Please try again shortly.' };
+  }
+  activeAnalysisCount++;
 
   const url = validation.normalizedUrl;
 
@@ -184,7 +193,6 @@ export async function analyzeMedia(rawUrl: string): Promise<MediaMetadata> {
     '--dump-json',
     '--no-playlist',
     '--no-warnings',
-    '--no-check-certificates',
     '--socket-timeout',
     '15',
     url
@@ -228,9 +236,11 @@ export async function analyzeMedia(rawUrl: string): Promise<MediaMetadata> {
     };
   } catch (err: any) {
     const stderr = err?.stderr || err?.message || String(err);
-    console.error('yt-dlp analyze error:', stderr);
+    console.error('yt-dlp analyze failed:', mapExtractionError(stderr).status, mapExtractionError(stderr).message);
     const mapped = mapExtractionError(stderr);
     throw mapped;
+  } finally {
+    activeAnalysisCount--;
   }
 }
 
@@ -243,9 +253,18 @@ export async function initiateDownloadJob(params: {
   formatType: 'video' | 'audio';
   title?: string;
 }): Promise<DownloadJob> {
+  if (params.formatType === 'audio' && !/^audio-(high|med|low)$/.test(params.formatId)) {
+    throw Object.assign(new Error('Invalid audio format selection.'), { status: 400 });
+  }
+  if (params.formatType === 'video' && !/^(best|bestvideo\+bestaudio\/best|[\w.-]{1,30})$/.test(params.formatId)) {
+    throw Object.assign(new Error('Invalid video format selection.'), { status: 400 });
+  }
   const validation = await validateMediaUrl(params.url);
   if (!validation.valid || !validation.normalizedUrl) {
     throw { status: 400, message: validation.reason || 'Invalid media URL' };
+  }
+  if (validation.platform === 'generic') {
+    throw Object.assign(new Error('This site is not supported. Please use a YouTube, Instagram, or Facebook link.'), { status: 400 });
   }
 
   const url = validation.normalizedUrl;
@@ -272,11 +291,11 @@ export async function initiateDownloadJob(params: {
     'yt_dlp',
     '--no-playlist',
     '--no-warnings',
-    '--no-check-certificates',
     '--socket-timeout',
     '20',
     '--newline' // For progress percentage parsing
   ];
+  args.push('--max-filesize', `${config.maxFileSizeMB}M`);
 
   if (isAudio) {
     // Extract audio and convert to MP3
@@ -313,10 +332,12 @@ export async function initiateDownloadJob(params: {
 
   let capturedStdout = '';
   let capturedStderr = '';
+  let spawnFailed = false;
+  const captureTail = (existing: string, chunk: string) => (existing + chunk).slice(-12000);
 
   child.stdout.on('data', data => {
     const text = data.toString();
-    capturedStdout += text;
+    capturedStdout = captureTail(capturedStdout, text);
     // Parse progress e.g. [download]  45.2% of 12.34MiB at 3.45MiB/s
     const match = text.match(/\[download\]\s+([\d.]+)%/);
     if (match && match[1]) {
@@ -339,18 +360,28 @@ export async function initiateDownloadJob(params: {
 
   child.stderr.on('data', data => {
     const text = data.toString();
-    capturedStderr += text;
+    capturedStderr = captureTail(capturedStderr, text);
   });
 
-  child.on('close', code => {
+  child.on('close', (code, signal) => {
     if (code === 0) {
       // Find the created file matching the job ID
       try {
         const files = fs.readdirSync(config.tempDir);
-        const matchedFile = files.find(f => f.startsWith(job.id));
+        const matchedFile = files.find(f => f.startsWith(`${job.id}.`) && !f.endsWith('.part') && !f.endsWith('.ytdl'));
         if (matchedFile) {
           const finalPath = path.join(config.tempDir, matchedFile);
           const stats = fs.statSync(finalPath);
+          if (!stats.isFile() || stats.size === 0) {
+            jobManager.updateJob(job.id, { status: 'error', message: 'The media platform returned an empty or invalid file. Please try again.' });
+            fs.unlinkSync(finalPath);
+            return;
+          }
+          if (stats.size > config.maxFileSizeMB * 1024 * 1024) {
+            fs.unlinkSync(finalPath);
+            jobManager.updateJob(job.id, { status: 'error', message: `This file exceeds the ${config.maxFileSizeMB} MB download limit.` });
+            return;
+          }
           jobManager.updateJob(job.id, {
             status: 'ready',
             progress: 100,
@@ -370,18 +401,21 @@ export async function initiateDownloadJob(params: {
         message: 'Download process completed but output file was not found.'
       });
     } else {
-      console.error(`yt-dlp exited with code ${code}. Stderr: "${capturedStderr}" | Stdout: "${capturedStdout}"`);
-      const errorText = capturedStderr || capturedStdout;
-      const mapped = mapExtractionError(errorText);
+      const failureText = signal ? 'download timed out' : (capturedStderr || capturedStdout);
+      const mapped = mapExtractionError(failureText);
+      console.error(`yt-dlp exited with code ${code ?? 'null'}${signal ? ` and signal ${signal}` : ''}. ${mapped.message}`);
       jobManager.updateJob(job.id, {
         status: 'error',
-        message: mapped.message
+        message: spawnFailed
+          ? 'The media processing service could not be started. Please try again later.'
+          : mapped.message
       });
     }
   });
 
   child.on('error', err => {
-    console.error('yt-dlp spawn error:', err);
+    spawnFailed = true;
+    console.error('yt-dlp spawn failed:', (err as NodeJS.ErrnoException).code || 'unknown process error');
     jobManager.updateJob(job.id, {
       status: 'error',
       message: 'Failed to start media extractor process.'

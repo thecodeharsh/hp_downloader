@@ -2,7 +2,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://hp-downloader-api.onrender.com/api/:path*"
+      "destination": "https://hp-downloader.onrender.com/api/:path*"
     },
     {
       "source": "/(.*)",

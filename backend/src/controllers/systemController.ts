@@ -67,7 +67,7 @@ export async function contactHandler(req: Request, res: Response): Promise<void>
   if (!parsed.success) {
     res.status(400).json({
       success: false,
-      error: parsed.error.errors[0]?.message || 'Invalid input data'
+      error: parsed.error.issues[0]?.message || 'Invalid input data'
     });
     return;
   }

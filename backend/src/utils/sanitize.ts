@@ -65,6 +65,13 @@ export function formatDuration(seconds?: number | null): string {
 export function mapExtractionError(errText: string): { status: number; message: string; details?: string } {
   const lower = errText.toLowerCase();
 
+  if (lower.includes("confirm you're not a bot") || lower.includes('not a bot') || lower.includes('automated queries') || lower.includes('http error 429') || lower.includes('too many requests')) {
+    return {
+      status: 503,
+      message: 'The platform is temporarily blocking requests from this server or requires authentication. Try again later, or use content the platform allows this service to access.'
+    };
+  }
+
   if (lower.includes('private video') || lower.includes('this video is private')) {
     return {
       status: 403,

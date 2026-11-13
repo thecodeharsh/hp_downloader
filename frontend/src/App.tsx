@@ -122,8 +122,16 @@ export const App: React.FC = () => {
       pollIntervalRef.current = window.setInterval(async () => {
         try {
           const pollRes = await fetch(apiUrl(`/api/download/status/${initialJob.id}`));
-          if (!pollRes.ok) return;
           const pollData = await pollRes.json();
+          if (!pollRes.ok) {
+            if (pollRes.status === 404) {
+              if (pollIntervalRef.current) window.clearInterval(pollIntervalRef.current);
+              pollIntervalRef.current = null;
+              setActiveJob({ ...initialJob, status: 'error', message: pollData.error || 'This download job expired or the server restarted. Please start again.' });
+              setIsDownloading(false);
+            }
+            return;
+          }
           if (pollData.success && pollData.job) {
             setActiveJob(pollData.job);
 
@@ -141,6 +149,7 @@ export const App: React.FC = () => {
                 pollIntervalRef.current = null;
               }
               setIsDownloading(false);
+              if (pollData.job.status === 'error') setError(pollData.job.message || 'The download failed. Please try again.');
             }
           }
         } catch (pollErr) {

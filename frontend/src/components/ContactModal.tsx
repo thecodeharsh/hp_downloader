@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { X, Mail, Send, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
+import { apiUrl } from '../utils/api.js';
 
 interface ContactModalProps {
   isOpen: boolean;
@@ -43,7 +44,7 @@ export const ContactModal: React.FC<ContactModalProps> = ({ isOpen, onClose }) =
 
     setSubmitting(true);
     try {
-      const res = await fetch('/api/contact', {
+      const res = await fetch(apiUrl('/api/contact'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, email, subject, message })

@@ -14,6 +14,7 @@ import { PrivacyModal } from './components/PrivacyModal.js';
 import { TermsModal } from './components/TermsModal.js';
 import { ContactModal } from './components/ContactModal.js';
 import { MediaMetadata, MediaFormatOption, DownloadJobState } from './types.js';
+import { apiUrl } from './utils/api.js';
 
 export const App: React.FC = () => {
   const [selectedPlatform, setSelectedPlatform] = useState<string>('youtube');
@@ -48,7 +49,7 @@ export const App: React.FC = () => {
     setMetadata(null);
 
     try {
-      const res = await fetch('/api/analyze', {
+      const res = await fetch(apiUrl('/api/analyze'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url })
@@ -86,7 +87,7 @@ export const App: React.FC = () => {
     setError(null);
 
     try {
-      const res = await fetch('/api/download', {
+      const res = await fetch(apiUrl('/api/download'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -120,7 +121,7 @@ export const App: React.FC = () => {
 
       pollIntervalRef.current = window.setInterval(async () => {
         try {
-          const pollRes = await fetch(`/api/download/status/${initialJob.id}`);
+          const pollRes = await fetch(apiUrl(`/api/download/status/${initialJob.id}`));
           if (!pollRes.ok) return;
           const pollData = await pollRes.json();
           if (pollData.success && pollData.job) {
@@ -155,7 +156,7 @@ export const App: React.FC = () => {
   };
 
   const triggerFileDownload = (jobId: string, filename: string) => {
-    const downloadUrl = `/api/download/file/${jobId}`;
+    const downloadUrl = apiUrl(`/api/download/file/${jobId}`);
     const a = document.createElement('a');
     a.href = downloadUrl;
     a.download = filename || 'download';

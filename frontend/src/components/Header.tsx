@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Download, Globe, Menu, X, CheckCircle2, ShieldCheck } from 'lucide-react';
+import { apiUrl } from '../utils/api.js';
 
 interface HeaderProps {
   onPlatformSelect: (platform: string) => void;
@@ -19,7 +20,7 @@ export const Header: React.FC<HeaderProps> = ({
 
   useEffect(() => {
     // Quick health probe to display API status pill
-    fetch('/api/health')
+    fetch(apiUrl('/api/health'))
       .then(res => res.json())
       .then(data => {
         setApiHealthy(data.status === 'healthy');

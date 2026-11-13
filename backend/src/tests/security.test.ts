@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { validateMediaUrl } from '../utils/ssrf.js';
-import { sanitizeFilename, formatBytes, formatDuration, mapExtractionError } from '../utils/sanitize.js';
+import { sanitizeFilename, formatBytes, formatDuration, mapExtractionError, sanitizeExtractionDiagnostics } from '../utils/sanitize.js';
 
 test('SSRF Protection - Blocks loopback, private IPs, and AWS metadata', async () => {
   const dangerousUrls = [
@@ -58,5 +58,25 @@ test('Formatting Helpers - Bytes and Duration', () => {
 test('Extraction errors explain YouTube hosted anti-bot blocks without claiming they are fixed', () => {
   const result = mapExtractionError("ERROR: [youtube] Sign in to confirm you're not a bot.");
   assert.equal(result.status, 503);
-  assert.match(result.message, /temporarily blocking requests from this server/i);
+  assert.match(result.message, /flagged this server request as automated/i);
+});
+
+test('Extraction errors distinguish rate limits, login, private media, unsupported URLs, timeouts, and networking', () => {
+  assert.equal(mapExtractionError('HTTP Error 429: Too Many Requests').status, 429);
+  assert.equal(mapExtractionError('Sign in to continue').status, 403);
+  assert.equal(mapExtractionError('This video is private').status, 403);
+  assert.equal(mapExtractionError('Unsupported URL').status, 400);
+  assert.equal(mapExtractionError('The operation timed out').status, 504);
+  assert.equal(mapExtractionError('getaddrinfo EAI_AGAIN youtube.com').status, 502);
+});
+
+test('yt-dlp diagnostics redact cookie headers, configured paths, and URL query secrets', () => {
+  const privateFile = '/etc/secrets/cookies.txt';
+  const text = sanitizeExtractionDiagnostics(
+    `Cookie: SID=very-secret\nAuthorization: Bearer auth-secret\nhttps://youtube.com/watch/secret-path?v=abc&token=also-secret ${privateFile}`,
+    [privateFile]
+  );
+  assert.doesNotMatch(text, /very-secret|auth-secret|also-secret|secret-path|cookies\.txt/i);
+  assert.match(text, /cookie-header-redacted/);
+  assert.match(text, /youtube\.com\/\[path-redacted\]/);
 });

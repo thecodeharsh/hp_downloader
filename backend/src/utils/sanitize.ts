@@ -59,16 +59,41 @@ export function formatDuration(seconds?: number | null): string {
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
+/** Removes query strings, credentials, cookie paths, and excessive output before logging yt-dlp diagnostics. */
+export function sanitizeExtractionDiagnostics(text: string, sensitivePaths: string[] = []): string {
+  let sanitized = String(text || '').slice(-6000);
+  for (const filePath of sensitivePaths) {
+    if (filePath) sanitized = sanitized.split(filePath).join('[cookie-file]');
+  }
+  return sanitized
+    .replace(/(?:set-)?cookie\s*:\s*[^\r\n]+/gi, '[cookie-header-redacted]')
+    .replace(/authorization\s*:\s*[^\r\n]+/gi, '[authorization-header-redacted]')
+    .replace(/https?:\/\/[^\s"'<>]+/gi, value => {
+      try {
+        const parsed = new URL(value.replace(/[),.;]+$/, ''));
+        return `${parsed.protocol}//${parsed.host}/[path-redacted]`;
+      } catch {
+        return '[url-redacted]';
+      }
+    });
+}
+
 /**
  * Maps raw backend/yt-dlp errors to clear, user-friendly explanations.
  */
 export function mapExtractionError(errText: string): { status: number; message: string; details?: string } {
   const lower = errText.toLowerCase();
 
-  if (lower.includes("confirm you're not a bot") || lower.includes('not a bot') || lower.includes('automated queries') || lower.includes('http error 429') || lower.includes('too many requests')) {
+  if (lower.includes("confirm you're not a bot") || lower.includes('not a bot') || lower.includes('automated queries') || lower.includes('unusual traffic')) {
     return {
       status: 503,
-      message: 'The platform is temporarily blocking requests from this server or requires authentication. Try again later, or use content the platform allows this service to access.'
+      message: 'The platform flagged this server request as automated or requires sign-in. Try again later. HP Downloader cannot bypass platform access restrictions.'
+    };
+  }
+  if (lower.includes('http error 429') || lower.includes('too many requests') || lower.includes('rate limit')) {
+    return {
+      status: 429,
+      message: 'The platform is rate-limiting requests from this server. Wait before retrying; repeated retries may continue to be blocked.'
     };
   }
 
@@ -78,10 +103,22 @@ export function mapExtractionError(errText: string): { status: number; message: 
       message: 'This media is private and requires authentication. HP Downloader respects user privacy and cannot access private content.'
     };
   }
-  if (lower.includes('sign in') || lower.includes('age restricted') || lower.includes('confirm your age')) {
+  if (lower.includes('age restricted') || lower.includes('confirm your age')) {
     return {
       status: 403,
-      message: 'This content is age-restricted or requires account sign-in. Downloading is not permitted for restricted content.'
+      message: 'This content is age-restricted. HP Downloader does not access age-restricted content.'
+    };
+  }
+  if (lower.includes('sign in') || lower.includes('authentication required')) {
+    return {
+      status: 403,
+      message: 'The platform requires an authorized session for this media. A service administrator can configure a server-side cookie secret for content they are authorized to access; private and age-restricted content remain unsupported.'
+    };
+  }
+  if (lower.includes('eai_again') || lower.includes('enotfound') || lower.includes('econnreset') || lower.includes('etimedout') || lower.includes('enetunreach') || lower.includes('network is unreachable') || lower.includes('temporary failure in name resolution')) {
+    return {
+      status: 502,
+      message: 'HP Downloader could not reach the source platform. Check the link and try again later.'
     };
   }
   if (lower.includes('video unavailable') || lower.includes('not available') || lower.includes('removed')) {

@@ -16,6 +16,7 @@ export const config = {
     ? productionCorsOrigin
     : (process.env.CORS_ORIGIN || 'http://localhost:3000,http://127.0.0.1:3000'),
   pythonPath: process.env.PYTHON_PATH || 'python',
+  ytDlpCookiesFile: process.env.YT_DLP_COOKIES_FILE || '',
   tempDir: process.env.TEMP_DIR || path.join(os.tmpdir(), 'hp-downloader-temp'),
   maxFileSizeMB: parseInt(process.env.MAX_FILE_SIZE_MB || '250', 10),
   analyzeTimeoutMs: parseInt(process.env.ANALYZE_TIMEOUT_MS || '35000', 10),

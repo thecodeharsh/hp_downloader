@@ -152,3 +152,9 @@ npm test
 - **Creator Attribution**: HP Downloader was authored by **Harsh Kumar**.
 - **User Responsibility**: Users must ensure they have legitimate rights or authorization to download any target content.
 - **Platform Adherence**: HP Downloader strictly abides by platforms' terms of service, fair-use guidelines, and does not harvest cookies, steal user credentials, or circumvent DRM.
+
+### Optional server-side yt-dlp cookies
+
+By default, extraction runs without account cookies. If a platform requires an authorized session for content the service operator is entitled to access, an administrator can optionally configure a Netscape-format `cookies.txt` file as a Render Secret File and set `YT_DLP_COOKIES_FILE=/etc/secrets/youtube-cookies.txt`. The backend copies that file to a mode-0600 temporary file for each extraction and removes the temporary copy when the process ends. Cookie contents are never sent to the frontend or written to application logs. yt-dlp reads the cookie file using its supported `--cookies FILE` option.
+
+Treat these cookies as account credentials: use a dedicated account, rotate or revoke them when no longer needed, and never commit them. **This application currently has no per-user authentication, so configured cookies are shared by every caller of the public API. Do not enable this option on an unrestricted public service.** Use it only behind access controls and for content the account owner is authorized to access. Cookies do not bypass DRM, paywalls, private-content policy, age restrictions, or platform anti-bot decisions, and may not resolve Render egress-IP blocking. To configure on Render, add the file under the service's Environment → Secret Files and set `YT_DLP_COOKIES_FILE` to its runtime path; saving changes triggers a deploy.

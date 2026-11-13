@@ -59,6 +59,18 @@ test('POST /api/analyze blocks localhost SSRF attack', async () => {
   assert.equal(data.success, false);
 });
 
+test('POST /api/analyze rejects a valid but unsupported site', async () => {
+  const res = await fetch(`${baseUrl}/api/analyze`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url: 'https://example.com/video.mp4' })
+  });
+  assert.equal(res.status, 400);
+  const data = await res.json() as any;
+  assert.equal(data.success, false);
+  assert.match(data.error, /site is not supported/i);
+});
+
 test('POST /api/contact validates and accepts inquiry', async () => {
   const res = await fetch(`${baseUrl}/api/contact`, {
     method: 'POST',

@@ -2,9 +2,10 @@ import { spawn, execFile } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import { promisify } from 'util';
+import { v4 as uuidv4 } from 'uuid';
 import { config } from '../config/index.js';
 import { validateMediaUrl } from '../utils/ssrf.js';
-import { sanitizeFilename, formatBytes, formatDuration, mapExtractionError } from '../utils/sanitize.js';
+import { sanitizeFilename, formatBytes, formatDuration, mapExtractionError, sanitizeExtractionDiagnostics } from '../utils/sanitize.js';
 import { jobManager, DownloadJob } from './jobManager.js';
 
 const execFileAsync = promisify(execFile);
@@ -39,6 +40,28 @@ export interface MediaMetadata {
 }
 
 let activeAnalysisCount = 0;
+
+/** Copies an optional Render secret file to a short-lived, owner-only temp file for yt-dlp. */
+function prepareCookiesFile(): string | undefined {
+  if (!config.ytDlpCookiesFile) return undefined;
+
+  const tempPath = path.join(config.tempDir, `.yt-dlp-cookies-${uuidv4()}.txt`);
+  try {
+    if (!fs.statSync(config.ytDlpCookiesFile).isFile()) throw new Error('Cookie secret is not a file');
+    fs.copyFileSync(config.ytDlpCookiesFile, tempPath, fs.constants.COPYFILE_EXCL);
+    fs.chmodSync(tempPath, 0o600);
+    return tempPath;
+  } catch {
+    try { fs.unlinkSync(tempPath); } catch { /* no temp copy was created */ }
+    console.error('[yt-dlp] configured cookie secret file is unavailable; extraction aborted');
+    throw Object.assign(new Error('The server-side media authentication configuration is unavailable. Please contact support.'), { status: 503 });
+  }
+}
+
+function removeCookiesFile(filePath?: string): void {
+  if (!filePath) return;
+  try { fs.unlinkSync(filePath); } catch { /* already removed or unavailable */ }
+}
 
 /**
  * Extracts and deduplicates clean format options from raw yt-dlp dump-json.
@@ -197,8 +220,11 @@ export async function analyzeMedia(rawUrl: string): Promise<MediaMetadata> {
     '15',
     url
   ];
+  let cookiesFile: string | undefined;
 
   try {
+    cookiesFile = prepareCookiesFile();
+    if (cookiesFile) args.splice(args.length - 1, 0, '--cookies', cookiesFile);
     const { stdout } = await execFileAsync(config.pythonPath, args, {
       timeout: config.analyzeTimeoutMs,
       maxBuffer: 20 * 1024 * 1024 // 20 MB buffer for detailed format json
@@ -236,10 +262,16 @@ export async function analyzeMedia(rawUrl: string): Promise<MediaMetadata> {
     };
   } catch (err: any) {
     const stderr = err?.stderr || err?.message || String(err);
-    console.error('yt-dlp analyze failed:', mapExtractionError(stderr).status, mapExtractionError(stderr).message);
-    const mapped = mapExtractionError(stderr);
+    const mapped = err?.status
+      ? { status: err.status, message: err.message }
+      : (err?.killed || err?.code === 'ETIMEDOUT'
+          ? { status: 504, message: 'The platform request timed out. Please try again or verify the link.' }
+          : mapExtractionError(stderr));
+    console.error(`[yt-dlp analyze] status=${mapped.status} code=${err?.code || 'n/a'} killed=${Boolean(err?.killed)} ${sanitizeExtractionDiagnostics(stderr, [cookiesFile || ''])}`);
+    if (err?.status) throw err;
     throw mapped;
   } finally {
+    removeCookiesFile(cookiesFile);
     activeAnalysisCount--;
   }
 }
@@ -282,6 +314,14 @@ export async function initiateDownloadJob(params: {
     safeFilename: `${safeTitle}.${targetExt}`
   });
 
+  let cookiesFile: string | undefined;
+  try {
+    cookiesFile = prepareCookiesFile();
+  } catch (err) {
+    jobManager.removeJob(job.id);
+    throw err;
+  }
+
   const outputPattern = path.join(config.tempDir, `${job.id}.%(ext)s`);
 
   // Build safe yt-dlp arguments array
@@ -317,6 +357,7 @@ export async function initiateDownloadJob(params: {
   }
 
   args.push('-o', outputPattern, url);
+  if (cookiesFile) args.splice(args.length - 1, 0, '--cookies', cookiesFile);
 
   jobManager.updateJob(job.id, {
     status: 'downloading',
@@ -364,6 +405,7 @@ export async function initiateDownloadJob(params: {
   });
 
   child.on('close', (code, signal) => {
+    removeCookiesFile(cookiesFile);
     if (code === 0) {
       // Find the created file matching the job ID
       try {
@@ -403,7 +445,8 @@ export async function initiateDownloadJob(params: {
     } else {
       const failureText = signal ? 'download timed out' : (capturedStderr || capturedStdout);
       const mapped = mapExtractionError(failureText);
-      console.error(`yt-dlp exited with code ${code ?? 'null'}${signal ? ` and signal ${signal}` : ''}. ${mapped.message}`);
+      const diagnostics = sanitizeExtractionDiagnostics(failureText, [cookiesFile || '']);
+      console.error(`[yt-dlp download] status=${mapped.status} code=${code ?? 'null'} signal=${signal || 'none'} ${diagnostics}`);
       jobManager.updateJob(job.id, {
         status: 'error',
         message: spawnFailed
@@ -414,6 +457,7 @@ export async function initiateDownloadJob(params: {
   });
 
   child.on('error', err => {
+    removeCookiesFile(cookiesFile);
     spawnFailed = true;
     console.error('yt-dlp spawn failed:', (err as NodeJS.ErrnoException).code || 'unknown process error');
     jobManager.updateJob(job.id, {

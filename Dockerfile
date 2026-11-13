@@ -36,7 +36,8 @@ COPY --from=backend-builder /app/backend/dist ./backend/dist
 COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
 
 # Create non-root user and temp dir
-RUN addgroup -S appgroup && adduser -S appuser -G appgroup && \
+RUN addgroup -g 1000 rendersecrets && addgroup -S appgroup && adduser -S appuser -G appgroup && \
+    addgroup appuser rendersecrets && \
     mkdir -p /tmp/hp-downloader-temp && \
     chown -R appuser:appgroup /app /tmp/hp-downloader-temp
 

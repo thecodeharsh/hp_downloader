@@ -7,6 +7,7 @@ build/
 # Environment files
 .env
 .env.local
+*cookies*.txt
 
 # Temp downloads
 *temp*
